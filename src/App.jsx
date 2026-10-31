@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./App.css";
+import { supabase } from "./lib/supabaseClient";
 
 const initialGoals = [
   {
