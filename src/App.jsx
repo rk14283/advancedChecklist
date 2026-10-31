@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+import Login from "./login";
 import { supabase } from "./lib/supabaseClient";
 
 const initialGoals = [
@@ -72,19 +73,65 @@ const initialColumns = [
 ];
 
 function App() {
+  /*
+   * --------------------------------
+   * AUTHENTICATION
+   * --------------------------------
+   */
+
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const getSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      setSession(session);
+      setAuthLoading(false);
+    };
+
+    getSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setSession(session);
+        setAuthLoading(false);
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+  }
+
+  /*
+   * --------------------------------
+   * APP STATE
+   * --------------------------------
+   */
+
   const [page, setPage] = useState("workspace");
   const [theme, setTheme] = useState("light");
 
   const [goals, setGoals] = useState(initialGoals);
   const [columns, setColumns] = useState(initialColumns);
+
   const [draggedColumnId, setDraggedColumnId] = useState(null);
-const [dragOverColumnId, setDragOverColumnId] = useState(null);
+  const [dragOverColumnId, setDragOverColumnId] = useState(null);
+
   const [archive, setArchive] = useState([]);
 
   const [newColumn, setNewColumn] = useState("");
   const [addingColumn, setAddingColumn] = useState(false);
 
-  // Currently edited task
   const [editingTask, setEditingTask] = useState(null);
   const [editingTaskText, setEditingTaskText] = useState("");
 
@@ -176,59 +223,89 @@ const [dragOverColumnId, setDragOverColumnId] = useState(null);
 
   /*
    * --------------------------------
-   * Move columns 
+   * MOVE COLUMNS
    * --------------------------------
    */
+
   const handleColumnDragStart = (event, columnId) => {
-  setDraggedColumnId(columnId);
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", columnId);
-};
+    setDraggedColumnId(columnId);
 
-const handleColumnDragOver = (event, columnId) => {
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(
+      "text/plain",
+      columnId
+    );
+  };
 
-  if (columnId !== draggedColumnId) {
-    setDragOverColumnId(columnId);
-  }
-};
+  const handleColumnDragOver = (event, columnId) => {
+    event.preventDefault();
 
-const handleColumnDrop = (event, targetColumnId) => {
-  event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
 
-  if (!draggedColumnId || draggedColumnId === targetColumnId) {
+    if (columnId !== draggedColumnId) {
+      setDragOverColumnId(columnId);
+    }
+  };
+
+  const handleColumnDrop = (
+    event,
+    targetColumnId
+  ) => {
+    event.preventDefault();
+
+    if (
+      !draggedColumnId ||
+      draggedColumnId === targetColumnId
+    ) {
+      setDraggedColumnId(null);
+      setDragOverColumnId(null);
+      return;
+    }
+
+    setColumns((currentColumns) => {
+      const draggedColumn =
+        currentColumns.find(
+          (column) =>
+            column.id === draggedColumnId
+        );
+
+      if (!draggedColumn) {
+        return currentColumns;
+      }
+
+      const remainingColumns =
+        currentColumns.filter(
+          (column) =>
+            column.id !== draggedColumnId
+        );
+
+      const targetIndex =
+        remainingColumns.findIndex(
+          (column) =>
+            column.id === targetColumnId
+        );
+
+      if (targetIndex === -1) {
+        return currentColumns;
+      }
+
+      remainingColumns.splice(
+        targetIndex,
+        0,
+        draggedColumn
+      );
+
+      return remainingColumns;
+    });
+
     setDraggedColumnId(null);
     setDragOverColumnId(null);
-    return;
-  }
+  };
 
-  setColumns((currentColumns) => {
-    const draggedColumn = currentColumns.find(
-      (column) => column.id === draggedColumnId
-    );
-
-    const remainingColumns = currentColumns.filter(
-      (column) => column.id !== draggedColumnId
-    );
-
-    const targetIndex = remainingColumns.findIndex(
-      (column) => column.id === targetColumnId
-    );
-
-    remainingColumns.splice(targetIndex, 0, draggedColumn);
-
-    return remainingColumns;
-  });
-
-  setDraggedColumnId(null);
-  setDragOverColumnId(null);
-};
-
-const handleColumnDragEnd = () => {
-  setDraggedColumnId(null);
-  setDragOverColumnId(null);
-};
+  const handleColumnDragEnd = () => {
+    setDraggedColumnId(null);
+    setDragOverColumnId(null);
+  };
 
   /*
    * --------------------------------
@@ -237,7 +314,9 @@ const handleColumnDragEnd = () => {
    */
 
   function addTask(columnId) {
-    const title = window.prompt("What task do you want to add?");
+    const title = window.prompt(
+      "What task do you want to add?"
+    );
 
     if (!title || !title.trim()) return;
 
@@ -264,9 +343,6 @@ const handleColumnDragEnd = () => {
    * --------------------------------
    * COMPLETE / UNCOMPLETE TASK
    * --------------------------------
-   *
-   * Completing a task does NOT archive it.
-   * It remains in the column.
    */
 
   function toggleTask(columnId, taskId) {
@@ -275,13 +351,15 @@ const handleColumnDragEnd = () => {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.map((task) =>
-                task.id === taskId
-                  ? {
-                      ...task,
-                      completed: !task.completed,
-                    }
-                  : task
+              tasks: column.tasks.map(
+                (task) =>
+                  task.id === taskId
+                    ? {
+                        ...task,
+                        completed:
+                          !task.completed,
+                      }
+                    : task
               ),
             }
           : column
@@ -301,7 +379,8 @@ const handleColumnDragEnd = () => {
   }
 
   function saveTaskEdit(columnId, taskId) {
-    const newTitle = editingTaskText.trim();
+    const newTitle =
+      editingTaskText.trim();
 
     if (!newTitle) {
       cancelTaskEdit();
@@ -313,13 +392,14 @@ const handleColumnDragEnd = () => {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.map((task) =>
-                task.id === taskId
-                  ? {
-                      ...task,
-                      title: newTitle,
-                    }
-                  : task
+              tasks: column.tasks.map(
+                (task) =>
+                  task.id === taskId
+                    ? {
+                        ...task,
+                        title: newTitle,
+                      }
+                    : task
               ),
             }
           : column
@@ -338,8 +418,6 @@ const handleColumnDragEnd = () => {
    * --------------------------------
    * ARCHIVE TASK
    * --------------------------------
-   *
-   * Only completed tasks can be archived.
    */
 
   function archiveTask(columnId, taskId) {
@@ -410,13 +488,15 @@ const handleColumnDragEnd = () => {
 
   function restoreTask(archiveId) {
     const task = archive.find(
-      (item) => item.archiveId === archiveId
+      (item) =>
+        item.archiveId === archiveId
     );
 
     if (!task) return;
 
     const existingColumn = columns.find(
-      (column) => column.title === task.originalColumn
+      (column) =>
+        column.title === task.originalColumn
     );
 
     if (existingColumn) {
@@ -456,15 +536,19 @@ const handleColumnDragEnd = () => {
 
     setArchive((current) =>
       current.filter(
-        (item) => item.archiveId !== archiveId
+        (item) =>
+          item.archiveId !== archiveId
       )
     );
   }
 
-  function permanentlyDeleteArchiveItem(archiveId) {
+  function permanentlyDeleteArchiveItem(
+    archiveId
+  ) {
     setArchive((current) =>
       current.filter(
-        (item) => item.archiveId !== archiveId
+        (item) =>
+          item.archiveId !== archiveId
       )
     );
   }
@@ -494,15 +578,34 @@ const handleColumnDragEnd = () => {
       0
     ) + archive.length;
 
-  const totalTasks = activeTasks + completedTasks;
+  const totalTasks =
+    activeTasks + completedTasks;
 
   const overallProgress =
     totalTasks === 0
       ? 0
       : Math.round(
-          (completedTasks / totalTasks) * 100
+          (completedTasks / totalTasks) *
+            100
         );
 
+  /*
+   * --------------------------------
+   * AUTH PROTECTION
+   * --------------------------------
+   */
+
+  if (authLoading) {
+    return (
+      <div className="auth-loading">
+        Loading...
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Login />;
+  }
   /*
    * --------------------------------
    * RENDER
@@ -518,7 +621,9 @@ return (
 
       <div className="brand">
         <h1>Project OS</h1>
-
+<button onClick={handleLogout}>
+  Log out
+</button>
         <p>
           Long-term goals → current focus → action
         </p>
