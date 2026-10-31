@@ -81,6 +81,7 @@ function App() {
 
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
 
   useEffect(() => {
     const getSession = async () => {
@@ -108,6 +109,275 @@ function App() {
     };
   }, []);
 
+  /*
+   * --------------------------------
+   * LOAD WORKSPACE
+   * --------------------------------
+   */
+
+  const loadWorkspace = async () => {
+    setWorkspaceLoading(true);
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      console.error(
+        "Could not get current user:",
+        userError
+      );
+
+      setWorkspaceLoading(false);
+      return;
+    }
+
+    let [
+      { data: goalsData, error: goalsError },
+      { data: columnsData, error: columnsError },
+      { data: tasksData, error: tasksError },
+      { data: archiveData, error: archiveError },
+    ] = await Promise.all([
+      supabase
+        .from("goals")
+        .select("*")
+        .order("position", { ascending: true }),
+
+      supabase
+        .from("columns")
+        .select("*")
+        .order("position", { ascending: true }),
+
+      supabase
+        .from("tasks")
+        .select("*")
+        .order("position", { ascending: true }),
+
+      supabase
+        .from("archived_tasks")
+        .select("*")
+        .order("archived_at", { ascending: false }),
+    ]);
+
+    if (goalsError) {
+      console.error(
+        "Error loading goals:",
+        goalsError
+      );
+    }
+
+    if (columnsError) {
+      console.error(
+        "Error loading columns:",
+        columnsError
+      );
+    }
+
+    if (tasksError) {
+      console.error(
+        "Error loading tasks:",
+        tasksError
+      );
+    }
+
+    if (archiveError) {
+      console.error(
+        "Error loading archived tasks:",
+        archiveError
+      );
+    }
+
+    /*
+     * --------------------------------
+     * FIRST-TIME WORKSPACE SEED
+     * --------------------------------
+     */
+
+    const workspaceIsEmpty =
+      (goalsData || []).length === 0 &&
+      (columnsData || []).length === 0 &&
+      (tasksData || []).length === 0 &&
+      (archiveData || []).length === 0;
+
+    if (workspaceIsEmpty) {
+      console.log(
+        "No workspace found. Creating initial workspace..."
+      );
+
+      /*
+       * CREATE GOALS
+       */
+
+      const {
+        data: createdGoals,
+        error: seedGoalsError,
+      } = await supabase
+        .from("goals")
+        .insert(
+          initialGoals.map((goal, index) => ({
+            title: goal.title,
+            description: goal.description,
+            position: index,
+          }))
+        )
+        .select();
+
+      if (seedGoalsError) {
+        console.error(
+          "Error creating initial goals:",
+          seedGoalsError
+        );
+
+        setWorkspaceLoading(false);
+        return;
+      }
+
+      /*
+       * CREATE COLUMNS
+       */
+
+      const {
+        data: createdColumns,
+        error: seedColumnsError,
+      } = await supabase
+        .from("columns")
+        .insert(
+          initialColumns.map((column, index) => ({
+            title: column.title,
+            position: index,
+          }))
+        )
+        .select();
+
+      if (seedColumnsError) {
+        console.error(
+          "Error creating initial columns:",
+          seedColumnsError
+        );
+
+        setWorkspaceLoading(false);
+        return;
+      }
+
+      /*
+       * CREATE TASKS
+       */
+
+      const tasksToInsert = [];
+
+      initialColumns.forEach(
+        (column, columnIndex) => {
+          const createdColumn =
+            createdColumns[columnIndex];
+
+          column.tasks.forEach(
+            (task, taskIndex) => {
+              tasksToInsert.push({
+                column_id: createdColumn.id,
+                title: task.title,
+                completed: task.completed,
+                position: taskIndex,
+              });
+            }
+          );
+        }
+      );
+
+      if (tasksToInsert.length > 0) {
+        const {
+          error: seedTasksError,
+        } = await supabase
+          .from("tasks")
+          .insert(tasksToInsert);
+
+        if (seedTasksError) {
+          console.error(
+            "Error creating initial tasks:",
+            seedTasksError
+          );
+
+          setWorkspaceLoading(false);
+          return;
+        }
+      }
+
+      /*
+       * Reload the workspace so React receives
+       * the real Supabase-generated IDs.
+       */
+
+      await loadWorkspace();
+      return;
+    }
+
+    /*
+     * --------------------------------
+     * REBUILD REACT STATE
+     * --------------------------------
+     */
+
+    const rebuiltColumns =
+      (columnsData || []).map((column) => ({
+        id: column.id,
+        title: column.title,
+        tasks: (tasksData || [])
+          .filter(
+            (task) =>
+              task.column_id === column.id
+          )
+          .map((task) => ({
+            id: task.id,
+            title: task.title,
+            completed: task.completed,
+          })),
+      }));
+
+    setGoals(
+      (goalsData || []).map((goal) => ({
+        id: goal.id,
+        title: goal.title,
+        description: goal.description,
+      }))
+    );
+
+    setColumns(rebuiltColumns);
+
+    setArchive(
+      (archiveData || []).map((item) => ({
+        archiveId: item.id,
+        title: item.title,
+        originalColumn:
+          item.original_column,
+        archivedAt: item.archived_at,
+        completedAt:
+          item.completed_at,
+        columnId: item.column_id,
+      }))
+    );
+
+    setWorkspaceLoading(false);
+  };
+
+  /*
+   * LOAD WORKSPACE WHEN USER IS LOGGED IN
+   */
+
+  useEffect(() => {
+    if (!session) {
+      setWorkspaceLoading(false);
+      return;
+    }
+
+    loadWorkspace();
+  }, [session]);
+
+  /*
+   * --------------------------------
+   * LOGOUT
+   * --------------------------------
+   */
+
   async function handleLogout() {
     await supabase.auth.signOut();
   }
@@ -118,22 +388,48 @@ function App() {
    * --------------------------------
    */
 
-  const [page, setPage] = useState("workspace");
-  const [theme, setTheme] = useState("light");
+  const [page, setPage] =
+    useState("workspace");
 
-  const [goals, setGoals] = useState(initialGoals);
-  const [columns, setColumns] = useState(initialColumns);
+  const [theme, setTheme] =
+    useState("light");
 
-  const [draggedColumnId, setDraggedColumnId] = useState(null);
-  const [dragOverColumnId, setDragOverColumnId] = useState(null);
+  const [goals, setGoals] =
+    useState(initialGoals);
 
-  const [archive, setArchive] = useState([]);
+  const [columns, setColumns] =
+    useState(initialColumns);
 
-  const [newColumn, setNewColumn] = useState("");
-  const [addingColumn, setAddingColumn] = useState(false);
+  const [
+    draggedColumnId,
+    setDraggedColumnId,
+  ] = useState(null);
 
-  const [editingTask, setEditingTask] = useState(null);
-  const [editingTaskText, setEditingTaskText] = useState("");
+  const [
+    dragOverColumnId,
+    setDragOverColumnId,
+  ] = useState(null);
+
+  const [archive, setArchive] =
+    useState([]);
+
+  const [newColumn, setNewColumn] =
+    useState("");
+
+  const [
+    addingColumn,
+    setAddingColumn,
+  ] = useState(false);
+
+  const [
+    editingTask,
+    setEditingTask,
+  ] = useState(null);
+
+  const [
+    editingTaskText,
+    setEditingTaskText,
+  ] = useState("");
 
   /*
    * --------------------------------
@@ -141,26 +437,75 @@ function App() {
    * --------------------------------
    */
 
-  function addGoal() {
-    const title = window.prompt("What is your long-term goal?");
+  async function addGoal() {
+    const title = window.prompt(
+      "What is your long-term goal?"
+    );
 
-    if (!title || !title.trim()) return;
+    if (!title || !title.trim()) {
+      return;
+    }
+
+    const cleanTitle = title.trim();
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("goals")
+      .insert({
+        title: cleanTitle,
+        description: "",
+        position: goals.length,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(
+        "Error adding goal:",
+        error
+      );
+      return;
+    }
 
     setGoals((current) => [
       ...current,
       {
-        id: Date.now(),
-        title: title.trim(),
-        description: "",
+        id: data.id,
+        title: data.title,
+        description:
+          data.description,
       },
     ]);
   }
 
-  function deleteGoal(goalId) {
-    if (!window.confirm("Delete this long-term goal?")) return;
+  async function deleteGoal(goalId) {
+    if (
+      !window.confirm(
+        "Delete this long-term goal?"
+      )
+    ) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("goals")
+      .delete()
+      .eq("id", goalId);
+
+    if (error) {
+      console.error(
+        "Error deleting goal:",
+        error
+      );
+      return;
+    }
 
     setGoals((current) =>
-      current.filter((goal) => goal.id !== goalId)
+      current.filter(
+        (goal) => goal.id !== goalId
+      )
     );
   }
 
@@ -170,16 +515,38 @@ function App() {
    * --------------------------------
    */
 
-  function addColumn() {
+  async function addColumn() {
     const title = newColumn.trim();
 
-    if (!title) return;
+    if (!title) {
+      return;
+    }
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("columns")
+      .insert({
+        title,
+        position: columns.length,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(
+        "Error adding column:",
+        error
+      );
+      return;
+    }
 
     setColumns((current) => [
       ...current,
       {
-        id: Date.now(),
-        title,
+        id: data.id,
+        title: data.title,
         tasks: [],
       },
     ]);
@@ -188,7 +555,7 @@ function App() {
     setAddingColumn(false);
   }
 
-  function deleteColumn(columnId) {
+  async function deleteColumn(columnId) {
     if (
       !window.confirm(
         "Delete this column and all of its active tasks?"
@@ -197,8 +564,24 @@ function App() {
       return;
     }
 
+    const { error } = await supabase
+      .from("columns")
+      .delete()
+      .eq("id", columnId);
+
+    if (error) {
+      console.error(
+        "Error deleting column:",
+        error
+      );
+      return;
+    }
+
     setColumns((current) =>
-      current.filter((column) => column.id !== columnId)
+      current.filter(
+        (column) =>
+          column.id !== columnId
+      )
     );
   }
 
@@ -208,7 +591,10 @@ function App() {
    * --------------------------------
    */
 
-  function renameColumn(columnId, newTitle) {
+  async function renameColumn(
+    columnId,
+    newTitle
+  ) {
     setColumns((current) =>
       current.map((column) =>
         column.id === columnId
@@ -219,6 +605,20 @@ function App() {
           : column
       )
     );
+
+    const { error } = await supabase
+      .from("columns")
+      .update({
+        title: newTitle,
+      })
+      .eq("id", columnId);
+
+    if (error) {
+      console.error(
+        "Error renaming column:",
+        error
+      );
+    }
   }
 
   /*
@@ -227,27 +627,38 @@ function App() {
    * --------------------------------
    */
 
-  const handleColumnDragStart = (event, columnId) => {
+  const handleColumnDragStart = (
+    event,
+    columnId
+  ) => {
     setDraggedColumnId(columnId);
 
-    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.effectAllowed =
+      "move";
+
     event.dataTransfer.setData(
       "text/plain",
       columnId
     );
   };
 
-  const handleColumnDragOver = (event, columnId) => {
+  const handleColumnDragOver = (
+    event,
+    columnId
+  ) => {
     event.preventDefault();
 
-    event.dataTransfer.dropEffect = "move";
+    event.dataTransfer.dropEffect =
+      "move";
 
-    if (columnId !== draggedColumnId) {
+    if (
+      columnId !== draggedColumnId
+    ) {
       setDragOverColumnId(columnId);
     }
   };
 
-  const handleColumnDrop = (
+  const handleColumnDrop = async (
     event,
     targetColumnId
   ) => {
@@ -262,41 +673,78 @@ function App() {
       return;
     }
 
-    setColumns((currentColumns) => {
-      const draggedColumn =
-        currentColumns.find(
-          (column) =>
-            column.id === draggedColumnId
-        );
-
-      if (!draggedColumn) {
-        return currentColumns;
-      }
-
-      const remainingColumns =
-        currentColumns.filter(
-          (column) =>
-            column.id !== draggedColumnId
-        );
-
-      const targetIndex =
-        remainingColumns.findIndex(
-          (column) =>
-            column.id === targetColumnId
-        );
-
-      if (targetIndex === -1) {
-        return currentColumns;
-      }
-
-      remainingColumns.splice(
-        targetIndex,
-        0,
-        draggedColumn
+    const draggedColumn =
+      columns.find(
+        (column) =>
+          column.id ===
+          draggedColumnId
       );
 
-      return remainingColumns;
-    });
+    if (!draggedColumn) {
+      setDraggedColumnId(null);
+      setDragOverColumnId(null);
+      return;
+    }
+
+    const remainingColumns =
+      columns.filter(
+        (column) =>
+          column.id !==
+          draggedColumnId
+      );
+
+    const targetIndex =
+      remainingColumns.findIndex(
+        (column) =>
+          column.id === targetColumnId
+      );
+
+    if (targetIndex === -1) {
+      setDraggedColumnId(null);
+      setDragOverColumnId(null);
+      return;
+    }
+
+    remainingColumns.splice(
+      targetIndex,
+      0,
+      draggedColumn
+    );
+
+    /*
+     * Save the new column order.
+     */
+
+    const updates =
+      remainingColumns.map(
+        (column, index) =>
+          supabase
+            .from("columns")
+            .update({
+              position: index,
+            })
+            .eq("id", column.id)
+      );
+
+    const results =
+      await Promise.all(updates);
+
+    const failed = results.find(
+      (result) => result.error
+    );
+
+    if (failed) {
+      console.error(
+        "Error saving column order:",
+        failed.error
+      );
+
+      setDraggedColumnId(null);
+      setDragOverColumnId(null);
+      return;
+    }
+
+    setColumns(remainingColumns);
 
     setDraggedColumnId(null);
     setDragOverColumnId(null);
@@ -313,12 +761,47 @@ function App() {
    * --------------------------------
    */
 
-  function addTask(columnId) {
+  async function addTask(columnId) {
     const title = window.prompt(
       "What task do you want to add?"
     );
 
-    if (!title || !title.trim()) return;
+    if (!title || !title.trim()) {
+      return;
+    }
+
+    const cleanTitle = title.trim();
+
+    const column = columns.find(
+      (column) =>
+        column.id === columnId
+    );
+
+    if (!column) {
+      return;
+    }
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("tasks")
+      .insert({
+        column_id: columnId,
+        title: cleanTitle,
+        completed: false,
+        position: column.tasks.length,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error(
+        "Error adding task:",
+        error
+      );
+      return;
+    }
 
     setColumns((current) =>
       current.map((column) =>
@@ -328,9 +811,10 @@ function App() {
               tasks: [
                 ...column.tasks,
                 {
-                  id: Date.now(),
-                  title: title.trim(),
-                  completed: false,
+                  id: data.id,
+                  title: data.title,
+                  completed:
+                    data.completed,
                 },
               ],
             }
@@ -345,7 +829,52 @@ function App() {
    * --------------------------------
    */
 
-  function toggleTask(columnId, taskId) {
+  async function toggleTask(
+    columnId,
+    taskId
+  ) {
+    const column = columns.find(
+      (column) =>
+        column.id === columnId
+    );
+
+    if (!column) {
+      return;
+    }
+
+    const task = column.tasks.find(
+      (task) =>
+        task.id === taskId
+    );
+
+    if (!task) {
+      return;
+    }
+
+    const newCompleted =
+      !task.completed;
+
+    const {
+      error,
+    } = await supabase
+      .from("tasks")
+      .update({
+        completed: newCompleted,
+        completed_at:
+          newCompleted
+            ? new Date().toISOString()
+            : null,
+      })
+      .eq("id", taskId);
+
+    if (error) {
+      console.error(
+        "Error updating task:",
+        error
+      );
+      return;
+    }
+
     setColumns((current) =>
       current.map((column) =>
         column.id === columnId
@@ -357,7 +886,7 @@ function App() {
                     ? {
                         ...task,
                         completed:
-                          !task.completed,
+                          newCompleted,
                       }
                     : task
               ),
@@ -378,12 +907,32 @@ function App() {
     setEditingTaskText(task.title);
   }
 
-  function saveTaskEdit(columnId, taskId) {
+  async function saveTaskEdit(
+    columnId,
+    taskId
+  ) {
     const newTitle =
       editingTaskText.trim();
 
     if (!newTitle) {
       cancelTaskEdit();
+      return;
+    }
+
+    const {
+      error,
+    } = await supabase
+      .from("tasks")
+      .update({
+        title: newTitle,
+      })
+      .eq("id", taskId);
+
+    if (error) {
+      console.error(
+        "Error updating task title:",
+        error
+      );
       return;
     }
 
@@ -420,28 +969,88 @@ function App() {
    * --------------------------------
    */
 
-  function archiveTask(columnId, taskId) {
+  async function archiveTask(
+    columnId,
+    taskId
+  ) {
     const column = columns.find(
-      (column) => column.id === columnId
+      (column) =>
+        column.id === columnId
     );
 
-    if (!column) return;
+    if (!column) {
+      return;
+    }
 
     const task = column.tasks.find(
-      (task) => task.id === taskId
+      (task) =>
+        task.id === taskId
     );
 
-    if (!task || !task.completed) return;
+    if (
+      !task ||
+      !task.completed
+    ) {
+      return;
+    }
 
-    const archivedTask = {
-      ...task,
-      archiveId: Date.now(),
-      originalColumn: column.title,
-      archivedAt: new Date().toISOString(),
-    };
+    const now =
+      new Date().toISOString();
+
+    const {
+      data: archivedData,
+      error: archiveError,
+    } = await supabase
+      .from("archived_tasks")
+      .insert({
+        column_id: columnId,
+        title: task.title,
+        original_column:
+          column.title,
+        completed_at: now,
+        archived_at: now,
+      })
+      .select()
+      .single();
+
+    if (archiveError) {
+      console.error(
+        "Error archiving task:",
+        archiveError
+      );
+      return;
+    }
+
+    const {
+      error: deleteError,
+    } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", taskId);
+
+    if (deleteError) {
+      console.error(
+        "Error removing archived task from active tasks:",
+        deleteError
+      );
+      return;
+    }
 
     setArchive((current) => [
-      archivedTask,
+      {
+        archiveId:
+          archivedData.id,
+        title:
+          archivedData.title,
+        originalColumn:
+          archivedData.original_column,
+        archivedAt:
+          archivedData.archived_at,
+        completedAt:
+          archivedData.completed_at,
+        columnId:
+          archivedData.column_id,
+      },
       ...current,
     ]);
 
@@ -451,7 +1060,8 @@ function App() {
           ? {
               ...column,
               tasks: column.tasks.filter(
-                (task) => task.id !== taskId
+                (task) =>
+                  task.id !== taskId
               ),
             }
           : column
@@ -465,14 +1075,33 @@ function App() {
    * --------------------------------
    */
 
-  function deleteTask(columnId, taskId) {
+  async function deleteTask(
+    columnId,
+    taskId
+  ) {
+    const {
+      error,
+    } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", taskId);
+
+    if (error) {
+      console.error(
+        "Error deleting task:",
+        error
+      );
+      return;
+    }
+
     setColumns((current) =>
       current.map((column) =>
         column.id === columnId
           ? {
               ...column,
               tasks: column.tasks.filter(
-                (task) => task.id !== taskId
+                (task) =>
+                  task.id !== taskId
               ),
             }
           : column
@@ -486,30 +1115,165 @@ function App() {
    * --------------------------------
    */
 
-  function restoreTask(archiveId) {
+  async function restoreTask(
+    archiveId
+  ) {
     const task = archive.find(
       (item) =>
-        item.archiveId === archiveId
+        item.archiveId ===
+        archiveId
     );
 
-    if (!task) return;
+    if (!task) {
+      return;
+    }
 
-    const existingColumn = columns.find(
-      (column) =>
-        column.title === task.originalColumn
-    );
+    let targetColumn =
+      columns.find(
+        (column) =>
+          column.id ===
+          task.columnId
+      );
 
-    if (existingColumn) {
+    /*
+     * If the original column was deleted,
+     * try to find one with the same name.
+     */
+
+    if (!targetColumn) {
+      targetColumn =
+        columns.find(
+          (column) =>
+            column.title ===
+            task.originalColumn
+        );
+    }
+
+    /*
+     * If the original column no longer
+     * exists, recreate it.
+     */
+
+    if (!targetColumn) {
+      const {
+        data: newColumn,
+        error: columnError,
+      } = await supabase
+        .from("columns")
+        .insert({
+          title:
+            task.originalColumn,
+          position:
+            columns.length,
+        })
+        .select()
+        .single();
+
+      if (columnError) {
+        console.error(
+          "Error recreating column:",
+          columnError
+        );
+        return;
+      }
+
+      targetColumn = {
+        id: newColumn.id,
+        title: newColumn.title,
+        tasks: [],
+      };
+    }
+
+    /*
+     * Create the active task again.
+     */
+
+    const {
+      data: restoredTask,
+      error: taskError,
+    } = await supabase
+      .from("tasks")
+      .insert({
+        column_id:
+          targetColumn.id,
+        title: task.title,
+        completed: false,
+        position:
+          targetColumn.tasks.length,
+      })
+      .select()
+      .single();
+
+    if (taskError) {
+      console.error(
+        "Error restoring task:",
+        taskError
+      );
+      return;
+    }
+
+    /*
+     * Remove the task from archive.
+     */
+
+    const {
+      error: archiveDeleteError,
+    } = await supabase
+      .from("archived_tasks")
+      .delete()
+      .eq("id", archiveId);
+
+    if (archiveDeleteError) {
+      console.error(
+        "Error removing task from archive:",
+        archiveDeleteError
+      );
+      return;
+    }
+
+    /*
+     * Update React state.
+     */
+
+    const columnAlreadyExists =
+      columns.some(
+        (column) =>
+          column.id ===
+          targetColumn.id
+      );
+
+    if (!columnAlreadyExists) {
+      setColumns((current) => [
+        ...current,
+        {
+          id: targetColumn.id,
+          title:
+            targetColumn.title,
+          tasks: [
+            {
+              id:
+                restoredTask.id,
+              title:
+                restoredTask.title,
+              completed: false,
+            },
+          ],
+        },
+      ]);
+    } else {
       setColumns((current) =>
         current.map((column) =>
-          column.id === existingColumn.id
+          column.id ===
+          targetColumn.id
             ? {
                 ...column,
                 tasks: [
                   ...column.tasks,
                   {
-                    id: Date.now(),
-                    title: task.title,
+                    id:
+                      restoredTask.id,
+                    title:
+                      restoredTask.title,
                     completed: false,
                   },
                 ],
@@ -517,38 +1281,40 @@ function App() {
             : column
         )
       );
-    } else {
-      setColumns((current) => [
-        ...current,
-        {
-          id: Date.now(),
-          title: task.originalColumn,
-          tasks: [
-            {
-              id: Date.now() + 1,
-              title: task.title,
-              completed: false,
-            },
-          ],
-        },
-      ]);
     }
 
     setArchive((current) =>
       current.filter(
         (item) =>
-          item.archiveId !== archiveId
+          item.archiveId !==
+          archiveId
       )
     );
   }
 
-  function permanentlyDeleteArchiveItem(
+  async function permanentlyDeleteArchiveItem(
     archiveId
   ) {
+    const {
+      error,
+    } = await supabase
+      .from("archived_tasks")
+      .delete()
+      .eq("id", archiveId);
+
+    if (error) {
+      console.error(
+        "Error permanently deleting archived task:",
+        error
+      );
+      return;
+    }
+
     setArchive((current) =>
       current.filter(
         (item) =>
-          item.archiveId !== archiveId
+          item.archiveId !==
+          archiveId
       )
     );
   }
@@ -559,21 +1325,24 @@ function App() {
    * --------------------------------
    */
 
-  const activeTasks = columns.reduce(
-    (total, column) =>
-      total +
-      column.tasks.filter(
-        (task) => !task.completed
-      ).length,
-    0
-  );
+  const activeTasks =
+    columns.reduce(
+      (total, column) =>
+        total +
+        column.tasks.filter(
+          (task) =>
+            !task.completed
+        ).length,
+      0
+    );
 
   const completedTasks =
     columns.reduce(
       (total, column) =>
         total +
         column.tasks.filter(
-          (task) => task.completed
+          (task) =>
+            task.completed
         ).length,
       0
     ) + archive.length;
@@ -585,7 +1354,8 @@ function App() {
     totalTasks === 0
       ? 0
       : Math.round(
-          (completedTasks / totalTasks) *
+          (completedTasks /
+            totalTasks) *
             100
         );
 
@@ -606,630 +1376,628 @@ function App() {
   if (!session) {
     return <Login />;
   }
+
+  if (workspaceLoading) {
+    return (
+      <div className="auth-loading">
+        Loading workspace...
+      </div>
+    );
+  }
+
   /*
    * --------------------------------
    * RENDER
    * --------------------------------
    */
 
-return (
-  <div className={`app ${theme}`}>
+  return (
+    <div
+      className={`app ${theme}`}
+    >
+      {/* HEADER */}
 
-    {/* HEADER */}
-
-    <header className="header">
-
-      <div className="brand">
-        <h1>Project OS</h1>
-<button onClick={handleLogout}>
-  Log out
-</button>
-        <p>
-          Long-term goals → current focus → action
-        </p>
-      </div>
-
-      <div className="header-actions">
-
-        <nav className="navigation">
+      <header className="header">
+        <div className="brand">
+          <h1>Project OS</h1>
 
           <button
-            className={
-              page === "workspace"
-                ? "nav-button active"
-                : "nav-button"
-            }
-            onClick={() => setPage("workspace")}
+            onClick={handleLogout}
           >
-            Workspace
+            Log out
           </button>
 
-          <button
-            className={
-              page === "archive"
-                ? "nav-button active"
-                : "nav-button"
-            }
-            onClick={() => setPage("archive")}
-          >
-            Archive
-
-            {archive.length > 0 && (
-              <span className="archive-count">
-                {archive.length}
-              </span>
-            )}
-          </button>
-
-        </nav>
-
-        <button
-          className="theme-toggle"
-          onClick={() =>
-            setTheme(
-              theme === "light"
-                ? "dark"
-                : "light"
-            )
-          }
-          title="Toggle theme"
-        >
-          {theme === "light" ? "☾" : "☀"}
-        </button>
-
-        <div className="overall-progress">
-          <span>Overall</span>
-
-          <strong>
-            {overallProgress}%
-          </strong>
+          <p>
+            Long-term goals →
+            current focus → action
+          </p>
         </div>
 
-      </div>
-
-    </header>
-
-    {/* --------------------------------
-        WORKSPACE
-        -------------------------------- */}
-
-    {page === "workspace" && (
-
-      <main>
-
-        {/* LONG TERM GOALS */}
-
-        <section className="goals-section">
-
-          <div className="section-header">
-
-            <div>
-              <span className="label">
-                DIRECTION
-              </span>
-
-              <h2>
-                Long-term goals
-              </h2>
-            </div>
-
+        <div className="header-actions">
+          <nav className="navigation">
             <button
-              className="add-button"
-              onClick={addGoal}
+              className={
+                page === "workspace"
+                  ? "nav-button active"
+                  : "nav-button"
+              }
+              onClick={() =>
+                setPage("workspace")
+              }
             >
-              + Add goal
+              Workspace
             </button>
 
+            <button
+              className={
+                page === "archive"
+                  ? "nav-button active"
+                  : "nav-button"
+              }
+              onClick={() =>
+                setPage("archive")
+              }
+            >
+              Archive
+
+              {archive.length > 0 && (
+                <span className="archive-count">
+                  {archive.length}
+                </span>
+              )}
+            </button>
+          </nav>
+
+          <button
+            className="theme-toggle"
+            onClick={() =>
+              setTheme(
+                theme === "light"
+                  ? "dark"
+                  : "light"
+              )
+            }
+            title="Toggle theme"
+          >
+            {theme === "light"
+              ? "☾"
+              : "☀"}
+          </button>
+
+          <div className="overall-progress">
+            <span>
+              Overall
+            </span>
+
+            <strong>
+              {overallProgress}%
+            </strong>
           </div>
+        </div>
+      </header>
 
-          <div className="goals">
+      {/* --------------------------------
+          WORKSPACE
+          -------------------------------- */}
 
-            {goals.map((goal) => (
+      {page === "workspace" && (
+        <main>
+          {/* LONG TERM GOALS */}
 
-              <div
-                className="goal-card"
-                key={goal.id}
-              >
+          <section className="goals-section">
+            <div className="section-header">
+              <div>
+                <span className="label">
+                  DIRECTION
+                </span>
 
-                <div className="goal-card-top">
-
-                  <div className="goal-symbol">
-                    ◎
-                  </div>
-
-                  <button
-                    className="small-button"
-                    onClick={() =>
-                      deleteGoal(goal.id)
-                    }
-                  >
-                    ×
-                  </button>
-
-                </div>
-
-                <h3>
-                  {goal.title}
-                </h3>
-
-                <p>
-                  {goal.description ||
-                    "Add a description for this goal."}
-                </p>
-
+                <h2>
+                  Long-term goals
+                </h2>
               </div>
-
-            ))}
-
-            {goals.length === 0 && (
-
-              <button
-                className="empty-goal"
-                onClick={addGoal}
-              >
-                + Add your first long-term goal
-              </button>
-
-            )}
-
-          </div>
-
-        </section>
-
-        {/* CURRENT FOCUS */}
-
-        <section className="workspace-section">
-
-          <div className="section-header">
-
-            <div>
-              <span className="label">
-                EXECUTION
-              </span>
-
-              <h2>
-                Current focus
-              </h2>
-            </div>
-
-            {!addingColumn && (
 
               <button
                 className="add-button"
+                onClick={addGoal}
+              >
+                + Add goal
+              </button>
+            </div>
+
+            <div className="goals">
+              {goals.map((goal) => (
+                <div
+                  className="goal-card"
+                  key={goal.id}
+                >
+                  <div className="goal-card-top">
+                    <div className="goal-symbol">
+                      ◎
+                    </div>
+
+                    <button
+                      className="small-button"
+                      onClick={() =>
+                        deleteGoal(
+                          goal.id
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <h3>
+                    {goal.title}
+                  </h3>
+
+                  <p>
+                    {goal.description ||
+                      "Add a description for this goal."}
+                  </p>
+                </div>
+              ))}
+
+              {goals.length === 0 && (
+                <button
+                  className="empty-goal"
+                  onClick={addGoal}
+                >
+                  + Add your first
+                  long-term goal
+                </button>
+              )}
+            </div>
+          </section>
+
+          {/* CURRENT FOCUS */}
+
+          <section className="workspace-section">
+            <div className="section-header">
+              <div>
+                <span className="label">
+                  EXECUTION
+                </span>
+
+                <h2>
+                  Current focus
+                </h2>
+              </div>
+
+              {!addingColumn && (
+                <button
+                  className="add-button"
+                  onClick={() =>
+                    setAddingColumn(
+                      true
+                    )
+                  }
+                >
+                  + Add column
+                </button>
+              )}
+            </div>
+
+            {/* ADD COLUMN */}
+
+            {addingColumn && (
+              <div className="new-column-form">
+                <input
+                  autoFocus
+                  value={newColumn}
+                  onChange={(event) =>
+                    setNewColumn(
+                      event.target.value
+                    )
+                  }
+                  placeholder="Column name..."
+                  onKeyDown={(event) => {
+                    if (
+                      event.key ===
+                      "Enter"
+                    ) {
+                      addColumn();
+                    }
+
+                    if (
+                      event.key ===
+                      "Escape"
+                    ) {
+                      setAddingColumn(
+                        false
+                      );
+                      setNewColumn("");
+                    }
+                  }}
+                />
+
+                <button
+                  onClick={addColumn}
+                >
+                  Add
+                </button>
+
+                <button
+                  className="cancel-button"
+                  onClick={() => {
+                    setAddingColumn(
+                      false
+                    );
+                    setNewColumn("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* COLUMNS */}
+
+            <div className="columns">
+              {columns.map((column) => (
+                <div
+                  className={`column ${
+                    draggedColumnId ===
+                    column.id
+                      ? "dragging"
+                      : ""
+                  } ${
+                    dragOverColumnId ===
+                    column.id
+                      ? "drag-over"
+                      : ""
+                  }`}
+                  key={column.id}
+                  onDragOver={(event) =>
+                    handleColumnDragOver(
+                      event,
+                      column.id
+                    )
+                  }
+                  onDrop={(event) =>
+                    handleColumnDrop(
+                      event,
+                      column.id
+                    )
+                  }
+                >
+                  {/* COLUMN HEADER */}
+
+                  <div className="column-header">
+                    {/* DRAG HANDLE */}
+
+                    <div
+                      className="drag-handle"
+                      draggable
+                      onDragStart={(
+                        event
+                      ) =>
+                        handleColumnDragStart(
+                          event,
+                          column.id
+                        )
+                      }
+                      onDragEnd={
+                        handleColumnDragEnd
+                      }
+                      title="Drag to move column"
+                      aria-label="Drag to move column"
+                    >
+                      ⋮⋮
+                    </div>
+
+                    <div className="column-title-wrapper">
+                      <input
+                        className="column-title"
+                        value={
+                          column.title
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          renameColumn(
+                            column.id,
+                            event.target
+                              .value
+                          )
+                        }
+                      />
+
+                      <span>
+                        {
+                          column.tasks.filter(
+                            (task) =>
+                              !task.completed
+                          ).length
+                        }{" "}
+                        active
+                      </span>
+                    </div>
+
+                    <button
+                      className="delete-column-button"
+                      onClick={() =>
+                        deleteColumn(
+                          column.id
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  {/* TASKS */}
+
+                  <div className="tasks">
+                    {column.tasks.map(
+                      (task) => (
+                        <div
+                          className={
+                            task.completed
+                              ? "task completed-task"
+                              : "task"
+                          }
+                          key={task.id}
+                        >
+                          {/* CHECKBOX */}
+
+                          <button
+                            className={
+                              task.completed
+                                ? "checkbox checked"
+                                : "checkbox"
+                            }
+                            onClick={() =>
+                              toggleTask(
+                                column.id,
+                                task.id
+                              )
+                            }
+                            title={
+                              task.completed
+                                ? "Mark as active"
+                                : "Complete task"
+                            }
+                          >
+                            {task.completed
+                              ? "✓"
+                              : ""}
+                          </button>
+
+                          {/* TASK TITLE */}
+
+                          {editingTask ===
+                          task.id ? (
+                            <input
+                              autoFocus
+                              className="task-title-input"
+                              value={
+                                editingTaskText
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                setEditingTaskText(
+                                  event.target
+                                    .value
+                                )
+                              }
+                              onBlur={() =>
+                                saveTaskEdit(
+                                  column.id,
+                                  task.id
+                                )
+                              }
+                              onKeyDown={(
+                                event
+                              ) => {
+                                if (
+                                  event.key ===
+                                  "Enter"
+                                ) {
+                                  saveTaskEdit(
+                                    column.id,
+                                    task.id
+                                  );
+                                }
+
+                                if (
+                                  event.key ===
+                                  "Escape"
+                                ) {
+                                  cancelTaskEdit();
+                                }
+                              }}
+                            />
+                          ) : (
+                            <span
+                              className="task-title"
+                              onClick={() =>
+                                startEditingTask(
+                                  task
+                                )
+                              }
+                              title="Click to edit"
+                            >
+                              {
+                                task.title
+                              }
+                            </span>
+                          )}
+
+                          {/* ARCHIVE BUTTON */}
+
+                          {task.completed && (
+                            <button
+                              className="archive-task-button"
+                              onClick={() =>
+                                archiveTask(
+                                  column.id,
+                                  task.id
+                                )
+                              }
+                              title="Archive completed task"
+                            >
+                              Archive
+                            </button>
+                          )}
+
+                          {/* DELETE BUTTON */}
+
+                          <button
+                            className="delete-task"
+                            onClick={() =>
+                              deleteTask(
+                                column.id,
+                                task.id
+                              )
+                            }
+                            title="Delete task"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )
+                    )}
+
+                    {column.tasks.length ===
+                      0 && (
+                      <div className="empty-tasks">
+                        No tasks
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ADD TASK */}
+
+                  <button
+                    className="add-task"
+                    onClick={() =>
+                      addTask(
+                        column.id
+                      )
+                    }
+                  >
+                    + Add task
+                  </button>
+                </div>
+              ))}
+
+              {/* ADD COLUMN */}
+
+              <button
+                className="add-column-card"
                 onClick={() =>
                   setAddingColumn(true)
                 }
               >
-                + Add column
+                <span>+</span>
+                Add column
               </button>
+            </div>
+          </section>
+        </main>
+      )}
 
-            )}
+      {/* --------------------------------
+          ARCHIVE
+          -------------------------------- */}
 
+      {page === "archive" && (
+        <main className="archive-page">
+          <div className="archive-header">
+            <div>
+              <span className="label">
+                HISTORY
+              </span>
+
+              <h2>
+                Archive
+              </h2>
+
+              <p>
+                Completed tasks that you
+                have chosen to archive.
+              </p>
+            </div>
           </div>
 
-          {/* ADD COLUMN */}
+          {archive.length === 0 ? (
+            <div className="empty-archive">
+              <div className="archive-icon">
+                ✓
+              </div>
 
-          {addingColumn && (
+              <h3>
+                Nothing archived yet
+              </h3>
 
-            <div className="new-column-form">
-
-              <input
-                autoFocus
-                value={newColumn}
-                onChange={(event) =>
-                  setNewColumn(
-                    event.target.value
-                  )
-                }
-                placeholder="Column name..."
-                onKeyDown={(event) => {
-
-                  if (event.key === "Enter") {
-                    addColumn();
-                  }
-
-                  if (event.key === "Escape") {
-                    setAddingColumn(false);
-                    setNewColumn("");
-                  }
-
-                }}
-              />
-
-              <button onClick={addColumn}>
-                Add
-              </button>
-
-              <button
-                className="cancel-button"
-                onClick={() => {
-                  setAddingColumn(false);
-                  setNewColumn("");
-                }}
-              >
-                Cancel
-              </button>
-
+              <p>
+                Complete a task and then
+                click Archive to move it
+                here.
+              </p>
             </div>
-
-          )}
-
-          {/* COLUMNS */}
-
-          <div className="columns">
-
-            {columns.map((column) => (
-
-              <div
-                className={`column ${
-                  draggedColumnId === column.id
-                    ? "dragging"
-                    : ""
-                } ${
-                  dragOverColumnId === column.id
-                    ? "drag-over"
-                    : ""
-                }`}
-                key={column.id}
-                onDragOver={(event) =>
-                  handleColumnDragOver(
-                    event,
-                    column.id
-                  )
-                }
-                onDrop={(event) =>
-                  handleColumnDrop(
-                    event,
-                    column.id
-                  )
-                }
-              >
-
-                {/* COLUMN HEADER */}
-
-                <div className="column-header">
-
-                  {/* DRAG HANDLE */}
-
-                  <div
-                    className="drag-handle"
-                    draggable
-                    onDragStart={(event) =>
-                      handleColumnDragStart(
-                        event,
-                        column.id
-                      )
-                    }
-                    onDragEnd={handleColumnDragEnd}
-                    title="Drag to move column"
-                    aria-label="Drag to move column"
-                  >
-                    ⋮⋮
-                  </div>
-
-                  <div className="column-title-wrapper">
-
-                    <input
-                      className="column-title"
-                      value={column.title}
-                      onChange={(event) =>
-                        renameColumn(
-                          column.id,
-                          event.target.value
-                        )
-                      }
-                    />
-
-                    <span>
-                      {column.tasks.filter(
-                        (task) => !task.completed
-                      ).length} active
-                    </span>
-
-                  </div>
-
-                  <button
-                    className="delete-column-button"
-                    onClick={() =>
-                      deleteColumn(
-                        column.id
-                      )
-                    }
-                  >
-                    ×
-                  </button>
-
-                </div>
-
-                {/* TASKS */}
-
-                <div className="tasks">
-
-                  {column.tasks.map((task) => (
-
-                    <div
-                      className={
-                        task.completed
-                          ? "task completed-task"
-                          : "task"
-                      }
-                      key={task.id}
-                    >
-
-                      {/* CHECKBOX */}
-
-                      <button
-                        className={
-                          task.completed
-                            ? "checkbox checked"
-                            : "checkbox"
-                        }
-                        onClick={() =>
-                          toggleTask(
-                            column.id,
-                            task.id
-                          )
-                        }
-                        title={
-                          task.completed
-                            ? "Mark as active"
-                            : "Complete task"
-                        }
-                      >
-                        {task.completed ? "✓" : ""}
-                      </button>
-
-                      {/* TASK TITLE */}
-
-                      {editingTask === task.id ? (
-
-                        <input
-                          autoFocus
-                          className="task-title-input"
-                          value={editingTaskText}
-                          onChange={(event) =>
-                            setEditingTaskText(
-                              event.target.value
-                            )
-                          }
-                          onBlur={() =>
-                            saveTaskEdit(
-                              column.id,
-                              task.id
-                            )
-                          }
-                          onKeyDown={(event) => {
-
-                            if (
-                              event.key === "Enter"
-                            ) {
-                              saveTaskEdit(
-                                column.id,
-                                task.id
-                              );
-                            }
-
-                            if (
-                              event.key === "Escape"
-                            ) {
-                              cancelTaskEdit();
-                            }
-
-                          }}
-                        />
-
-                      ) : (
-
-                        <span
-                          className="task-title"
-                          onClick={() =>
-                            startEditingTask(task)
-                          }
-                          title="Click to edit"
-                        >
-                          {task.title}
-                        </span>
-
-                      )}
-
-                      {/* ARCHIVE BUTTON */}
-
-                      {task.completed && (
-                        <button
-                          className="archive-task-button"
-                          onClick={() =>
-                            archiveTask(
-                              column.id,
-                              task.id
-                            )
-                          }
-                          title="Archive completed task"
-                        >
-                          Archive
-                        </button>
-                      )}
-
-                      {/* DELETE BUTTON */}
-
-                      <button
-                        className="delete-task"
-                        onClick={() =>
-                          deleteTask(
-                            column.id,
-                            task.id
-                          )
-                        }
-                        title="Delete task"
-                      >
-                        ×
-                      </button>
-
-                    </div>
-
-                  ))}
-
-                  {column.tasks.length === 0 && (
-
-                    <div className="empty-tasks">
-                      No tasks
-                    </div>
-
-                  )}
-
-                </div>
-
-                {/* ADD TASK */}
-
-                <button
-                  className="add-task"
-                  onClick={() =>
-                    addTask(column.id)
+          ) : (
+            <div className="archive-list">
+              {archive.map((task) => (
+                <div
+                  className="archive-item"
+                  key={
+                    task.archiveId
                   }
                 >
-                  + Add task
-                </button>
+                  <div className="archive-check">
+                    ✓
+                  </div>
 
-              </div>
+                  <div className="archive-task-info">
+                    <span className="archive-task-title">
+                      {task.title}
+                    </span>
 
-            ))}
+                    <span className="archive-meta">
+                      {
+                        task.originalColumn
+                      }
+                      {" · "}
+                      Completed{" "}
+                      {new Date(
+                        task.archivedAt
+                      ).toLocaleDateString()}
+                    </span>
+                  </div>
 
-            {/* ADD COLUMN */}
+                  <div className="archive-actions">
+                    <button
+                      onClick={() =>
+                        restoreTask(
+                          task.archiveId
+                        )
+                      }
+                    >
+                      Restore
+                    </button>
 
-            <button
-              className="add-column-card"
-              onClick={() =>
-                setAddingColumn(true)
-              }
-            >
-              <span>+</span>
-              Add column
-            </button>
-
-          </div>
-
-        </section>
-
-      </main>
-
-    )}
-
-    {/* --------------------------------
-        ARCHIVE
-        -------------------------------- */}
-
-    {page === "archive" && (
-
-      <main className="archive-page">
-
-        <div className="archive-header">
-
-          <div>
-            <span className="label">
-              HISTORY
-            </span>
-
-            <h2>
-              Archive
-            </h2>
-
-            <p>
-              Completed tasks that you have
-              chosen to archive.
-            </p>
-          </div>
-
-        </div>
-
-        {archive.length === 0 ? (
-
-          <div className="empty-archive">
-
-            <div className="archive-icon">
-              ✓
+                    <button
+                      className="permanent-delete"
+                      onClick={() =>
+                        permanentlyDeleteArchiveItem(
+                          task.archiveId
+                        )
+                      }
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-
-            <h3>
-              Nothing archived yet
-            </h3>
-
-            <p>
-              Complete a task and then click
-              Archive to move it here.
-            </p>
-
-          </div>
-
-        ) : (
-
-          <div className="archive-list">
-
-            {archive.map((task) => (
-
-              <div
-                className="archive-item"
-                key={task.archiveId}
-              >
-
-                <div className="archive-check">
-                  ✓
-                </div>
-
-                <div className="archive-task-info">
-
-                  <span className="archive-task-title">
-                    {task.title}
-                  </span>
-
-                  <span className="archive-meta">
-                    {task.originalColumn}
-                    {" · "}
-                    Completed{" "}
-                    {new Date(
-                      task.archivedAt
-                    ).toLocaleDateString()}
-                  </span>
-
-                </div>
-
-                <div className="archive-actions">
-
-                  <button
-                    onClick={() =>
-                      restoreTask(
-                        task.archiveId
-                      )
-                    }
-                  >
-                    Restore
-                  </button>
-
-                  <button
-                    className="permanent-delete"
-                    onClick={() =>
-                      permanentlyDeleteArchiveItem(
-                        task.archiveId
-                      )
-                    }
-                  >
-                    Delete
-                  </button>
-
-                </div>
-
-              </div>
-
-            ))}
-
-          </div>
-
-        )}
-
-      </main>
-
-    )}
-
-  </div>
-);
+          )}
+        </main>
+      )}
+    </div>
+  );
 }
 
 export default App;
