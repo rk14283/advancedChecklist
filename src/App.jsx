@@ -133,31 +133,51 @@ function App() {
       return;
     }
 
-    let [
-      { data: goalsData, error: goalsError },
-      { data: columnsData, error: columnsError },
-      { data: tasksData, error: tasksError },
-      { data: archiveData, error: archiveError },
+    const [
+      {
+        data: goalsData,
+        error: goalsError,
+      },
+      {
+        data: columnsData,
+        error: columnsError,
+      },
+      {
+        data: tasksData,
+        error: tasksError,
+      },
+      {
+        data: archiveData,
+        error: archiveError,
+      },
     ] = await Promise.all([
       supabase
         .from("goals")
         .select("*")
-        .order("position", { ascending: true }),
+        .order("position", {
+          ascending: true,
+        }),
 
       supabase
         .from("columns")
         .select("*")
-        .order("position", { ascending: true }),
+        .order("position", {
+          ascending: true,
+        }),
 
       supabase
         .from("tasks")
         .select("*")
-        .order("position", { ascending: true }),
+        .order("position", {
+          ascending: true,
+        }),
 
       supabase
         .from("archived_tasks")
         .select("*")
-        .order("archived_at", { ascending: false }),
+        .order("archived_at", {
+          ascending: false,
+        }),
     ]);
 
     if (goalsError) {
@@ -190,6 +210,22 @@ function App() {
 
     /*
      * --------------------------------
+     * STOP IF DATABASE READ FAILED
+     * --------------------------------
+     */
+
+    if (
+      goalsError ||
+      columnsError ||
+      tasksError ||
+      archiveError
+    ) {
+      setWorkspaceLoading(false);
+      return;
+    }
+
+    /*
+     * --------------------------------
      * FIRST-TIME WORKSPACE SEED
      * --------------------------------
      */
@@ -215,11 +251,14 @@ function App() {
       } = await supabase
         .from("goals")
         .insert(
-          initialGoals.map((goal, index) => ({
-            title: goal.title,
-            description: goal.description,
-            position: index,
-          }))
+          initialGoals.map(
+            (goal, index) => ({
+              title: goal.title,
+              description:
+                goal.description,
+              position: index,
+            })
+          )
         )
         .select();
 
@@ -243,10 +282,12 @@ function App() {
       } = await supabase
         .from("columns")
         .insert(
-          initialColumns.map((column, index) => ({
-            title: column.title,
-            position: index,
-          }))
+          initialColumns.map(
+            (column, index) => ({
+              title: column.title,
+              position: index,
+            })
+          )
         )
         .select();
 
@@ -274,9 +315,11 @@ function App() {
           column.tasks.forEach(
             (task, taskIndex) => {
               tasksToInsert.push({
-                column_id: createdColumn.id,
+                column_id:
+                  createdColumn.id,
                 title: task.title,
-                completed: task.completed,
+                completed:
+                  task.completed,
                 position: taskIndex,
               });
             }
@@ -303,8 +346,8 @@ function App() {
       }
 
       /*
-       * Reload the workspace so React receives
-       * the real Supabase-generated IDs.
+       * Reload workspace using
+       * real Supabase IDs.
        */
 
       await loadWorkspace();
@@ -318,49 +361,62 @@ function App() {
      */
 
     const rebuiltColumns =
-      (columnsData || []).map((column) => ({
-        id: column.id,
-        title: column.title,
-        tasks: (tasksData || [])
-          .filter(
-            (task) =>
-              task.column_id === column.id
-          )
-          .map((task) => ({
-            id: task.id,
-            title: task.title,
-            completed: task.completed,
-          })),
-      }));
+      (columnsData || []).map(
+        (column) => ({
+          id: column.id,
+          title: column.title,
+          tasks: (tasksData || [])
+            .filter(
+              (task) =>
+                task.column_id ===
+                column.id
+            )
+            .map((task) => ({
+              id: task.id,
+              title: task.title,
+              completed:
+                task.completed,
+            })),
+        })
+      );
 
     setGoals(
-      (goalsData || []).map((goal) => ({
-        id: goal.id,
-        title: goal.title,
-        description: goal.description,
-      }))
+      (goalsData || []).map(
+        (goal) => ({
+          id: goal.id,
+          title: goal.title,
+          description:
+            goal.description,
+        })
+      )
     );
 
     setColumns(rebuiltColumns);
 
     setArchive(
-      (archiveData || []).map((item) => ({
-        archiveId: item.id,
-        title: item.title,
-        originalColumn:
-          item.original_column,
-        archivedAt: item.archived_at,
-        completedAt:
-          item.completed_at,
-        columnId: item.column_id,
-      }))
+      (archiveData || []).map(
+        (item) => ({
+          archiveId: item.id,
+          title: item.title,
+          originalColumn:
+            item.original_column,
+          archivedAt:
+            item.archived_at,
+          completedAt:
+            item.completed_at,
+          columnId:
+            item.column_id,
+        })
+      )
     );
 
     setWorkspaceLoading(false);
   };
 
   /*
-   * LOAD WORKSPACE WHEN USER IS LOGGED IN
+   * --------------------------------
+   * LOAD WORKSPACE WHEN LOGGED IN
+   * --------------------------------
    */
 
   useEffect(() => {
@@ -504,7 +560,88 @@ function App() {
 
     setGoals((current) =>
       current.filter(
-        (goal) => goal.id !== goalId
+        (goal) =>
+          goal.id !== goalId
+      )
+    );
+  }
+
+  /*
+   * EDIT GOAL TITLE
+   */
+
+  async function updateGoalTitle(
+    goalId,
+    newTitle
+  ) {
+    const cleanTitle =
+      newTitle.trim();
+
+    if (!cleanTitle) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from("goals")
+      .update({
+        title: cleanTitle,
+      })
+      .eq("id", goalId);
+
+    if (error) {
+      console.error(
+        "Error updating goal title:",
+        error
+      );
+      return;
+    }
+
+    setGoals((current) =>
+      current.map((goal) =>
+        goal.id === goalId
+          ? {
+              ...goal,
+              title: cleanTitle,
+            }
+          : goal
+      )
+    );
+  }
+
+  /*
+   * EDIT GOAL DESCRIPTION
+   */
+
+  async function updateGoalDescription(
+    goalId,
+    newDescription
+  ) {
+    const { error } =
+      await supabase
+        .from("goals")
+        .update({
+          description:
+            newDescription,
+        })
+        .eq("id", goalId);
+
+    if (error) {
+      console.error(
+        "Error updating goal description:",
+        error
+      );
+      return;
+    }
+
+    setGoals((current) =>
+      current.map((goal) =>
+        goal.id === goalId
+          ? {
+              ...goal,
+              description:
+                newDescription,
+            }
+          : goal
       )
     );
   }
@@ -516,7 +653,8 @@ function App() {
    */
 
   async function addColumn() {
-    const title = newColumn.trim();
+    const title =
+      newColumn.trim();
 
     if (!title) {
       return;
@@ -555,7 +693,9 @@ function App() {
     setAddingColumn(false);
   }
 
-  async function deleteColumn(columnId) {
+  async function deleteColumn(
+    columnId
+  ) {
     if (
       !window.confirm(
         "Delete this column and all of its active tasks?"
@@ -564,10 +704,11 @@ function App() {
       return;
     }
 
-    const { error } = await supabase
-      .from("columns")
-      .delete()
-      .eq("id", columnId);
+    const { error } =
+      await supabase
+        .from("columns")
+        .delete()
+        .eq("id", columnId);
 
     if (error) {
       console.error(
@@ -606,12 +747,13 @@ function App() {
       )
     );
 
-    const { error } = await supabase
-      .from("columns")
-      .update({
-        title: newTitle,
-      })
-      .eq("id", columnId);
+    const { error } =
+      await supabase
+        .from("columns")
+        .update({
+          title: newTitle,
+        })
+        .eq("id", columnId);
 
     if (error) {
       console.error(
@@ -652,9 +794,12 @@ function App() {
       "move";
 
     if (
-      columnId !== draggedColumnId
+      columnId !==
+      draggedColumnId
     ) {
-      setDragOverColumnId(columnId);
+      setDragOverColumnId(
+        columnId
+      );
     }
   };
 
@@ -666,7 +811,8 @@ function App() {
 
     if (
       !draggedColumnId ||
-      draggedColumnId === targetColumnId
+      draggedColumnId ===
+        targetColumnId
     ) {
       setDraggedColumnId(null);
       setDragOverColumnId(null);
@@ -696,7 +842,8 @@ function App() {
     const targetIndex =
       remainingColumns.findIndex(
         (column) =>
-          column.id === targetColumnId
+          column.id ===
+          targetColumnId
       );
 
     if (targetIndex === -1) {
@@ -712,7 +859,7 @@ function App() {
     );
 
     /*
-     * Save the new column order.
+     * Save new order.
      */
 
     const updates =
@@ -727,7 +874,9 @@ function App() {
       );
 
     const results =
-      await Promise.all(updates);
+      await Promise.all(
+        updates
+      );
 
     const failed = results.find(
       (result) => result.error
@@ -744,7 +893,9 @@ function App() {
       return;
     }
 
-    setColumns(remainingColumns);
+    setColumns(
+      remainingColumns
+    );
 
     setDraggedColumnId(null);
     setDragOverColumnId(null);
@@ -761,7 +912,9 @@ function App() {
    * --------------------------------
    */
 
-  async function addTask(columnId) {
+  async function addTask(
+    columnId
+  ) {
     const title = window.prompt(
       "What task do you want to add?"
     );
@@ -770,7 +923,8 @@ function App() {
       return;
     }
 
-    const cleanTitle = title.trim();
+    const cleanTitle =
+      title.trim();
 
     const column = columns.find(
       (column) =>
@@ -790,7 +944,8 @@ function App() {
         column_id: columnId,
         title: cleanTitle,
         completed: false,
-        position: column.tasks.length,
+        position:
+          column.tasks.length,
       })
       .select()
       .single();
@@ -859,7 +1014,8 @@ function App() {
     } = await supabase
       .from("tasks")
       .update({
-        completed: newCompleted,
+        completed:
+          newCompleted,
         completed_at:
           newCompleted
             ? new Date().toISOString()
@@ -880,16 +1036,18 @@ function App() {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.map(
-                (task) =>
-                  task.id === taskId
-                    ? {
-                        ...task,
-                        completed:
-                          newCompleted,
-                      }
-                    : task
-              ),
+              tasks:
+                column.tasks.map(
+                  (task) =>
+                    task.id ===
+                    taskId
+                      ? {
+                          ...task,
+                          completed:
+                            newCompleted,
+                        }
+                      : task
+                ),
             }
           : column
       )
@@ -902,9 +1060,13 @@ function App() {
    * --------------------------------
    */
 
-  function startEditingTask(task) {
+  function startEditingTask(
+    task
+  ) {
     setEditingTask(task.id);
-    setEditingTaskText(task.title);
+    setEditingTaskText(
+      task.title
+    );
   }
 
   async function saveTaskEdit(
@@ -941,15 +1103,18 @@ function App() {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.map(
-                (task) =>
-                  task.id === taskId
-                    ? {
-                        ...task,
-                        title: newTitle,
-                      }
-                    : task
-              ),
+              tasks:
+                column.tasks.map(
+                  (task) =>
+                    task.id ===
+                    taskId
+                      ? {
+                          ...task,
+                          title:
+                            newTitle,
+                        }
+                      : task
+                ),
             }
           : column
       )
@@ -1059,10 +1224,12 @@ function App() {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.filter(
-                (task) =>
-                  task.id !== taskId
-              ),
+              tasks:
+                column.tasks.filter(
+                  (task) =>
+                    task.id !==
+                    taskId
+                ),
             }
           : column
       )
@@ -1099,10 +1266,12 @@ function App() {
         column.id === columnId
           ? {
               ...column,
-              tasks: column.tasks.filter(
-                (task) =>
-                  task.id !== taskId
-              ),
+              tasks:
+                column.tasks.filter(
+                  (task) =>
+                    task.id !==
+                    taskId
+                ),
             }
           : column
       )
@@ -1136,8 +1305,8 @@ function App() {
       );
 
     /*
-     * If the original column was deleted,
-     * try to find one with the same name.
+     * If original column was deleted,
+     * try to find one with same name.
      */
 
     if (!targetColumn) {
@@ -1150,7 +1319,7 @@ function App() {
     }
 
     /*
-     * If the original column no longer
+     * If original column no longer
      * exists, recreate it.
      */
 
@@ -1179,13 +1348,14 @@ function App() {
 
       targetColumn = {
         id: newColumn.id,
-        title: newColumn.title,
+        title:
+          newColumn.title,
         tasks: [],
       };
     }
 
     /*
-     * Create the active task again.
+     * Create active task again.
      */
 
     const {
@@ -1213,7 +1383,7 @@ function App() {
     }
 
     /*
-     * Remove the task from archive.
+     * Remove task from archive.
      */
 
     const {
@@ -1251,8 +1421,7 @@ function App() {
             targetColumn.title,
           tasks: [
             {
-              id:
-                restoredTask.id,
+              id: restoredTask.id,
               title:
                 restoredTask.title,
               completed: false,
@@ -1527,14 +1696,85 @@ function App() {
                     </button>
                   </div>
 
-                  <h3>
-                    {goal.title}
-                  </h3>
+                  {/* EDITABLE GOAL TITLE */}
 
-                  <p>
-                    {goal.description ||
-                      "Add a description for this goal."}
-                  </p>
+                  <input
+                    className="goal-title-input"
+                    value={goal.title}
+                    onChange={(event) =>
+                      setGoals(
+                        (current) =>
+                          current.map(
+                            (item) =>
+                              item.id ===
+                              goal.id
+                                ? {
+                                    ...item,
+                                    title:
+                                      event
+                                        .target
+                                        .value,
+                                  }
+                                : item
+                          )
+                      )
+                    }
+                    onBlur={(event) =>
+                      updateGoalTitle(
+                        goal.id,
+                        event.target
+                          .value
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (
+                        event.key ===
+                        "Enter"
+                      ) {
+                        event.currentTarget.blur();
+                      }
+
+                      if (
+                        event.key ===
+                        "Escape"
+                      ) {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    aria-label="Goal title"
+                  />
+
+                  {/* EDITABLE GOAL DESCRIPTION */}
+
+                 <textarea
+  className="goal-description-input"
+  value={goal.description}
+  placeholder="Add a description for this goal."
+  onChange={(event) => {
+    setGoals((current) =>
+      current.map((item) =>
+        item.id === goal.id
+          ? {
+              ...item,
+              description:
+                event.target.value,
+            }
+          : item
+      )
+    );
+
+    event.target.style.height = "auto";
+    event.target.style.height =
+      `${event.target.scrollHeight}px`;
+  }}
+  onBlur={(event) =>
+    updateGoalDescription(
+      goal.id,
+      event.target.value
+    )
+  }
+  aria-label="Goal description"
+/>
                 </div>
               ))}
 
@@ -1587,7 +1827,8 @@ function App() {
                   value={newColumn}
                   onChange={(event) =>
                     setNewColumn(
-                      event.target.value
+                      event.target
+                        .value
                     )
                   }
                   placeholder="Column name..."
@@ -1778,7 +2019,8 @@ function App() {
                                 event
                               ) =>
                                 setEditingTaskText(
-                                  event.target
+                                  event
+                                    .target
                                     .value
                                 )
                               }
